@@ -207,14 +207,14 @@ class _ChannelRawDataChartState extends State<ChannelRawDataRealtimeChart> {
 class GetDataStreamUseCase {
   Stream<Data> execute() async* {
     // 100 iterations for 300 millis each => 30 sec
-    for (int i = 1; i <= 100; i++) {
+    for (int i = 0; i <= 100; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 300));
       // 2000 points for each iteration
       yield Data(
         List<Point>.generate(
           2000,
           (int index) => Point(
-            0.00015 * index * i,
+            i * 0.3 + 0.00015 * index,
             Random().nextDouble() *
                 Random().nextDouble() *
                 150 *
