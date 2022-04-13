@@ -73,13 +73,17 @@ class _ChannelRawDataChartState extends State<ChannelRawDataRealtimeChart> {
   late GetDataStreamUseCase _getDataStreamUseCase;
   StreamSubscription<Data>? _dataSubscription;
 
+  late GetDataUseCase _getDataUseCase;
+
   @override
   void initState() {
     super.initState();
 
     _zoomPanBehavior = ChartZoomBehavior();
     _getDataStreamUseCase = GetDataStreamUseCase();
-    _getData();
+    _getDataUseCase = GetDataUseCase();
+    _listenStream();
+    _getPreviousData();
   }
 
   @override
@@ -112,7 +116,7 @@ class _ChannelRawDataChartState extends State<ChannelRawDataRealtimeChart> {
 
   List<ChartSeries<Point, double>> getSeries() {
     return <ChartSeries<Point, double>>[
-      FastLineSeries<Point, double>(
+      LineSeries<Point, double>(
         dataSource: _data.points,
         animationDuration: 0.0,
         animationDelay: 0.0,
@@ -142,7 +146,16 @@ class _ChannelRawDataChartState extends State<ChannelRawDataRealtimeChart> {
     isLoadMoreView = false;
   }
 
-  Future<void> _getData() async {
+  Future<void> _getPreviousData() async {
+    try {
+      final Data data = await _getDataUseCase.execute();
+      _updatePreviousData(data.points);
+    } catch (e) {
+      _showException(e);
+    }
+  }
+
+  Future<void> _listenStream() async {
     try {
       _dataSubscription?.cancel();
 
@@ -180,12 +193,31 @@ class _ChannelRawDataChartState extends State<ChannelRawDataRealtimeChart> {
     // _zoomPanBehavior.zoomIn();
   }
 
+  void _updatePreviousData(List<Point> points) {
+    Data updated = _data.prepend(points);
+    setState(() {
+      _data = updated;
+    });
+    // seriesController?.updateDataSource(
+    //   updatedDataIndexes: _getPreviousIndexes(
+    //     _data.points.length,
+    //   ),
+    // );
+  }
+
   List<int> _getIndexes(int total, int newItems) {
     final List<int> indexes = <int>[];
     for (int i = newItems - 1; i >= 0; i--) {
       indexes.add(total - 1 - i);
     }
     return indexes;
+  }
+
+  List<int> _getPreviousIndexes(int prevItems) {
+    return List<int>.generate(
+      prevItems,
+      (int index) => index,
+    );
   }
 
   void _showException(Object error) {
@@ -204,10 +236,29 @@ class _ChannelRawDataChartState extends State<ChannelRawDataRealtimeChart> {
   }
 }
 
+class GetDataUseCase {
+  Future<Data> execute() async {
+    await Future<void>.delayed(const Duration(seconds: 2));
+    // for 3 seconds
+    return Data(
+      List<Point>.generate(
+        20000,
+        (int index) => Point(
+          0.00015 * index,
+          Random().nextDouble() *
+              Random().nextDouble() *
+              50 *
+              (Random().nextBool() ? -1 : 1),
+        ),
+      ),
+    );
+  }
+}
+
 class GetDataStreamUseCase {
   Stream<Data> execute() async* {
     // 100 iterations for 300 millis each => 30 sec
-    for (int i = 0; i <= 100; i++) {
+    for (int i = 10; i <= 30; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 300));
       // 2000 points for each iteration
       yield Data(
@@ -249,6 +300,13 @@ class Data {
   Data append(List<Point> points) {
     return Data(
       this.points..addAll(points),
+      newItems: points.length,
+    );
+  }
+
+  Data prepend(List<Point> points) {
+    return Data(
+      points..addAll(this.points),
       newItems: points.length,
     );
   }
