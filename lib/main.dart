@@ -43,7 +43,6 @@ class _MyHomePageState extends State<MyHomePage> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: const <Widget>[
             ChannelRawDataRealtimeChart(),
-            LinearProgressIndicator(),
           ],
         ),
       ),
@@ -70,8 +69,10 @@ class _ChannelRawDataChartState extends State<ChannelRawDataRealtimeChart> {
   late Data _data = Data.zero();
   bool isLoadMoreView = false;
 
-  late GetDataStreamUseCase _getDataStreamUseCase;
-  StreamSubscription<Data>? _dataSubscription;
+  final double windowTime = 0.6;
+  double nextStart = 0;
+  double nextEnd = 0;
+  bool hasNextWindow = true;
 
   late GetDataUseCase _getDataUseCase;
 
@@ -80,10 +81,10 @@ class _ChannelRawDataChartState extends State<ChannelRawDataRealtimeChart> {
     super.initState();
 
     _zoomPanBehavior = ChartZoomBehavior();
-    _getDataStreamUseCase = GetDataStreamUseCase();
     _getDataUseCase = GetDataUseCase();
-    _listenStream();
-    _getPreviousData();
+
+    _setupWindow(2); // 2 seconds
+    _getInitialData();
   }
 
   @override
@@ -111,6 +112,9 @@ class _ChannelRawDataChartState extends State<ChannelRawDataRealtimeChart> {
       primaryYAxis: ChartYAxis(),
       series: getSeries(),
       onActualRangeChanged: onRangeChanged,
+      loadMoreIndicatorBuilder:
+          (BuildContext context, ChartSwipeDirection direction) =>
+              getLoadMoreIndicatorBuilder(context, direction),
     );
   }
 
@@ -132,88 +136,100 @@ class _ChannelRawDataChartState extends State<ChannelRawDataRealtimeChart> {
 
   void onRangeChanged(ActualRangeChangedArgs args) {
     if (args.orientation == AxisOrientation.horizontal) {
-      // Logger().i('changed: ${args.actualMin} : ${args.actualMax}');
       if (isLoadMoreView) {
         args.visibleMin = oldAxisVisibleMin;
         args.visibleMax = oldAxisVisibleMax;
       }
-      oldAxisVisibleMax =
-          double.parse((args.actualMax as num).toStringAsFixed(3));
-      oldAxisVisibleMin = oldAxisVisibleMax! > loadInterval * 2
-          ? oldAxisVisibleMax! - loadInterval * 2
-          : oldAxisVisibleMax! - loadInterval;
+      if (args.visibleMin is int) {
+        oldAxisVisibleMin = (args.visibleMin as int).toDouble();
+      } else {
+        oldAxisVisibleMin = args.visibleMin as double;
+      }
+      if (args.visibleMax is int) {
+        oldAxisVisibleMax = (args.visibleMax as int).toDouble();
+      } else {
+        oldAxisVisibleMax = args.visibleMax as double;
+      }
     }
     isLoadMoreView = false;
   }
 
-  Future<void> _getPreviousData() async {
+  Widget getLoadMoreIndicatorBuilder(
+      BuildContext context, ChartSwipeDirection direction) {
+    final bool minIsVisible = oldAxisVisibleMin?.toStringAsFixed(1) ==
+        _data.points.first.x.toStringAsFixed(1);
+    print('>>> min: $minIsVisible >>> hasNextWindow: $hasNextWindow');
+    if (direction == ChartSwipeDirection.start &&
+        hasNextWindow &&
+        minIsVisible) {
+      return FutureBuilder<void>(
+        future: _getMoreData(),
+        builder: (BuildContext futureContext, AsyncSnapshot<void> snapShot) {
+          return snapShot.connectionState != ConnectionState.done
+              ? Container(
+                  color: Colors.white.withOpacity(0.7),
+                  padding: const EdgeInsets.all(16.0),
+                  child: const CircularProgressIndicator(),
+                )
+              : SizedBox.fromSize(size: Size.zero);
+        },
+      );
+    } else {
+      return SizedBox.fromSize(size: Size.zero);
+    }
+  }
+
+  void _setupWindow(double end) {
+    nextEnd = end;
+    nextStart = nextEnd - windowTime;
+    if (nextStart < 0) {
+      nextStart = 0;
+    }
+    hasNextWindow = nextEnd - nextStart > 0;
+  }
+
+  Future<void> _getInitialData() async {
+    if (!hasNextWindow) {
+      return;
+    }
+
     try {
-      final Data data = await _getDataUseCase.execute();
-      _updatePreviousData(data.points);
+      final Data data = await _getDataUseCase.execute(nextStart, nextEnd);
+      _setupWindow(data.points.first.x);
+
+      setState(() {
+        _data = data;
+      });
     } catch (e) {
       _showException(e);
     }
   }
 
-  Future<void> _listenStream() async {
+  Future<void> _getMoreData() async {
     try {
-      _dataSubscription?.cancel();
+      final Data data = await _getDataUseCase.execute(nextStart, nextEnd);
+      if (data.points.isNotEmpty) {
+        _setupWindow(data.points.first.x);
 
-      _dataSubscription = _getDataStreamUseCase.execute().listen(
-        (Data data) {
-          if (mounted) {
-            if (_data.points.isEmpty) {
-              setState(() {
-                _data = data;
-              });
-            } else {
-              _updateData(data.points);
-            }
-          }
-        },
-        onError: (Object e) {
-          _showException(e);
-        },
-      );
+        _updateData(data.points);
+      } else {
+        hasNextWindow = false;
+      }
     } catch (e) {
       _showException(e);
     }
   }
 
   void _updateData(List<Point> points) {
-    _data = _data.append(points);
+    _data = _data.prepend(points);
     isLoadMoreView = true;
+
     seriesController?.updateDataSource(
-      addedDataIndexes: _getIndexes(
-        _data.points.length,
-        _data.newItems,
-      ),
+      addedDataIndexes: _getIndexes(points.length),
     );
-    // this zoomIn fixes actual range update in some cases
-    // _zoomPanBehavior.zoomIn();
   }
 
-  void _updatePreviousData(List<Point> points) {
-    Data updated = _data.prepend(points);
-    setState(() {
-      _data = updated;
-    });
-    // seriesController?.updateDataSource(
-    //   updatedDataIndexes: _getPreviousIndexes(
-    //     _data.points.length,
-    //   ),
-    // );
-  }
-
-  List<int> _getIndexes(int total, int newItems) {
-    final List<int> indexes = <int>[];
-    for (int i = newItems - 1; i >= 0; i--) {
-      indexes.add(total - 1 - i);
-    }
-    return indexes;
-  }
-
-  List<int> _getPreviousIndexes(int prevItems) {
+  List<int> _getIndexes(int prevItems) {
     return List<int>.generate(
       prevItems,
       (int index) => index,
@@ -230,50 +246,32 @@ class _ChannelRawDataChartState extends State<ChannelRawDataRealtimeChart> {
   void dispose() {
     seriesController = null;
     _data.clear();
-    _dataSubscription?.cancel();
-    _dataSubscription = null;
     super.dispose();
   }
 }
 
 class GetDataUseCase {
-  Future<Data> execute() async {
+  Future<Data> execute(double nextStart, double nextEnd) async {
+    print('>>> GET DATA: $nextStart > $nextEnd');
     await Future<void>.delayed(const Duration(seconds: 2));
+    const int pointsPerSecond = 1000;
+    final double timeWindow = nextEnd - nextStart;
+    final int points = (pointsPerSecond * timeWindow).round();
+    final double timeStep =
+        double.parse((timeWindow / points).toStringAsFixed(4));
     // for 3 seconds
     return Data(
       List<Point>.generate(
-        20000,
+        points,
         (int index) => Point(
-          0.00015 * index,
+          nextEnd - timeStep * index,
           Random().nextDouble() *
               Random().nextDouble() *
               50 *
               (Random().nextBool() ? -1 : 1),
         ),
-      ),
+      ).reversed.toList(),
     );
-  }
-}
-
-class GetDataStreamUseCase {
-  Stream<Data> execute() async* {
-    // 100 iterations for 300 millis each => 30 sec
-    for (int i = 10; i <= 30; i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 300));
-      // 2000 points for each iteration
-      yield Data(
-        List<Point>.generate(
-          2000,
-          (int index) => Point(
-            i * 0.3 + 0.00015 * index,
-            Random().nextDouble() *
-                Random().nextDouble() *
-                150 *
-                (Random().nextBool() ? -1 : 1),
-          ),
-        ),
-      );
-    }
   }
 }
 
@@ -282,6 +280,11 @@ class Point {
 
   final double x;
   final double y;
+
+  @override
+  String toString() {
+    return '{x: $x, y: $y}';
+  }
 }
 
 class Data {
@@ -306,7 +309,7 @@ class Data {
 
   Data prepend(List<Point> points) {
     return Data(
-      points..addAll(this.points),
+      this.points..insertAll(0, points),
       newItems: points.length,
     );
   }
