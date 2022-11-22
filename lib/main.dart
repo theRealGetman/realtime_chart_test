@@ -89,14 +89,9 @@ class _ChannelRawDataChartState extends State<ChannelRawDataRealtimeChart> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        SizedBox(
-          height: 400.0,
-          child: _buildInfiniteScrollingChart(),
-        ),
-      ],
+    return SizedBox(
+      height: 400.0,
+      child: _buildInfiniteScrollingChart(),
     );
   }
 
